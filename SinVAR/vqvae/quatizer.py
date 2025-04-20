@@ -132,29 +132,39 @@ class VectorQuantizer2(nn.Module):
 
     # ============ `forward` is only used in VAE training ============
 
-    def embed_to_fhat(self, ms_h_BChw: List[torch.Tensor], last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
+    def embed_to_fhat(self, ms_h_BChw: List[torch.Tensor], all_to_max_scale=True, last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
         """
         This function is essentially doing the step in the forward function from after obtaining the embedding vector
         until obtaining the reconstructed vector from using the quantised vector.
         :param ms_h_BChw: This is the list of multi-scale quantised vector
         :param last_one: Whether we want to only keep the final accumulated results; otherwise, will return the steps of accumulated steps
+        :param all_to_max_scale: Whether we want to keep the final accumulated results; otherwise, will return the final accumulated results
         :return: As demonstrated in the :attr:`last_one`
         """
         ls_f_hat_BChw = []
         B = ms_h_BChw[0].shape[0]
         H = W = self.v_patch_nums[-1]
         SN = len(self.v_patch_nums)
-        f_hat = ms_h_BChw[0].new_zeros(B, self.Cvae, H, W, dtype=torch.float32)
-        for si, pn in enumerate(self.v_patch_nums):  # This is basically the same as the forward function above
-            h_BChw = ms_h_BChw[si]
-            if si < len(self.v_patch_nums) - 1:
-                h_BChw = F.interpolate(h_BChw, size=(H, W), mode='bicubic')
-            h_BChw = self.quant_resi[si / (SN - 1)](h_BChw)
-            f_hat.add_(h_BChw)
-            if last_one:
-                ls_f_hat_BChw = f_hat
-            else:
-                ls_f_hat_BChw.append(f_hat.clone())
+        if all_to_max_scale:
+            f_hat = ms_h_BChw[0].new_zeros(B, self.Cvae, H, W, dtype=torch.float32)
+            for si, pn in enumerate(self.v_patch_nums):  # This is basically the same as the forward function above
+                h_BChw = ms_h_BChw[si]
+                if si < len(self.v_patch_nums) - 1:
+                    h_BChw = F.interpolate(h_BChw, size=(H, W), mode='bicubic')
+                h_BChw = self.quant_resi[si / (SN - 1)](h_BChw)
+                f_hat.add_(h_BChw)
+                if last_one:
+                    ls_f_hat_BChw = f_hat
+                else:
+                    ls_f_hat_BChw.append(f_hat.clone())
+        else:
+            f_hat = ms_h_BChw[0].new_zeros(B, self.Cvae, self.v_patch_nums[0], self.v_patch_nums[0], dtype=torch.float32)
+            for si, pn in enumerate(self.v_patch_nums): # from small to large
+                f_hat = F.interpolate(f_hat, size=(pn, pn), mode='bicubic')
+                h_BChw = self.quant_resi[si/(SN-1)](ms_h_BChw[si])
+                f_hat.add_(h_BChw)
+                if last_one: ls_f_hat_BChw = f_hat
+                else: ls_f_hat_BChw.append(f_hat)
 
         return ls_f_hat_BChw
 
@@ -194,8 +204,7 @@ class VectorQuantizer2(nn.Module):
                 z_NC = F.normalize(z_NC, dim=-1)
                 idx_N = torch.argmax(z_NC @ F.normalize(self.embedding.weight.data.T, dim=0), dim=1)
             else:
-                d_no_grad = (torch.sum(z_NC.square(), dim=1, keepdim=True)
-                             + torch.sum(self.embedding.weight.data.square(), dim=1, keepdim=False))
+                d_no_grad = torch.sum(z_NC.square(), dim=1, keepdim=True) + torch.sum(self.embedding.weight.data.square(), dim=1, keepdim=False)
                 d_no_grad.addmm_(z_NC, self.embedding.weight.data.T, alpha=-2, beta=1)  # Euclidean norm
                 idx_N = torch.argmin(d_no_grad, dim=1)
 

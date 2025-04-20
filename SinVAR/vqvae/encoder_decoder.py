@@ -90,7 +90,7 @@ class AttnBlock(nn.Module):
                                         padding=0)
 
     def forward(self, x):
-        qkv: torch.Tensor = self.qkv(x)
+        qkv: torch.Tensor = self.qkv(self.norm(x))
         B, _, H, W = qkv.shape  # Should be [B, 3C, H, W]
         C = self.C
         q, k, v = qkv.reshape(B, 3, C, H, W).unbind(dim=1)

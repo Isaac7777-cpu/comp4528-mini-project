@@ -44,7 +44,7 @@ class VQVAE(nn.Module):
             share_quant_resi=share_quant_resi
         )
         self.quant_conv = nn.Conv2d(self.Cvae, self.Cvae, kernel_size=quant_conv_ks, stride=1, padding=quant_conv_ks//2)
-        self.post_qunat_conv = nn.Conv2d(self.Cvae, self.Cvae, kernel_size=quant_conv_ks, stride=1, padding=quant_conv_ks//2)
+        self.post_quant_conv = nn.Conv2d(self.Cvae, self.Cvae, kernel_size=quant_conv_ks, stride=1, padding=quant_conv_ks // 2)
 
         if self.test_mode:
             self.eval()
@@ -52,10 +52,10 @@ class VQVAE(nn.Module):
 
     def forward(self, inp: torch.Tensor, ret_usages=False):
         f_hat, usages, vq_loss = self.quantize(self.quant_conv(self.encoder(inp)), ret_usages=ret_usages)
-        return self.decoder(self.post_qunat_conv(f_hat)), usages, vq_loss
+        return self.decoder(self.post_quant_conv(f_hat)), usages, vq_loss
 
     def fhat_to_image(self, f_hat: torch.Tensor):
-        return self.decoder(self.post_qunat_conv(f_hat)).clamp_(-1, 1)
+        return self.decoder(self.post_quant_conv(f_hat)).clamp_(-1, 1)
 
     def img_to_idxBl(self, inp_img_no_grad: torch.Tensor, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None) -> List[torch.LongTensor]:
         f = self.quant_conv(self.encoder(inp_img_no_grad))
@@ -70,11 +70,11 @@ class VQVAE(nn.Module):
             ms_h_BChw.append(self.quantize.embedding(idx_Bl).transpose(1, 2).view(B, self.Cvae, pn, pn))
         return self.embed_to_img(ms_h_BChw=ms_h_BChw, all_to_max_scale=same_shape, last_one=last_one)
 
-    def embed_to_img(self, ms_h_BChw: List[torch.Tensor], last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
+    def embed_to_img(self, ms_h_BChw: List[torch.Tensor], all_to_max_scale: bool,  last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
         if last_one:
-            return self.decoder(self.post_quant_conv(self.quantize.embed_to_fhat(ms_h_BChw, last_one=True))).clamp_(-1, 1)
+            return self.decoder(self.post_quant_conv(self.quantize.embed_to_fhat(ms_h_BChw, all_to_max_scale=all_to_max_scale, last_one=True))).clamp_(-1, 1)
         else:
-            return [self.decoder(self.post_quant_conv(f_hat)).clamp_(-1, 1) for f_hat in self.quantize.embed_to_fhat(ms_h_BChw, last_one=False)]
+            return [self.decoder(self.post_quant_conv(f_hat)).clamp_(-1, 1) for f_hat in self.quantize.embed_to_fhat(ms_h_BChw, all_to_max_scale=all_to_max_scale, last_one=False)]
 
     def img_to_reconstructed_img(self, x, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None, last_one=False) -> List[torch.Tensor]:
         """
