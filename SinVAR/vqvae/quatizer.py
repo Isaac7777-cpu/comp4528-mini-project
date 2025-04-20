@@ -52,10 +52,11 @@ class VectorQuantizer2(nn.Module):
         return f'{self.v_patch_nums}, znorm={self.using_znorm}, beta={self.beta} | S={len(self.v_patch_nums)}, quant_resi={self.quant_resi_ratio}'
 
     # ============ 'forward' function only for training ============
-    def forward(self, f_BChw: torch.Tensor, ret_usages=False) -> Tuple[torch.Tensor, List[float], torch.Tensor]:
+    def forward(self, f_BChw: torch.Tensor, ret_usages=False) -> Tuple[torch.Tensor, List[float], torch.Tensor, torch.Tensor]:
         dtype = f_BChw.dtype
         if dtype != torch.float32: f_BChw = f_BChw.float()
         B, C, H, W = f_BChw.shape
+        # print(B, C, H, W)
         f_no_grad = f_BChw.detach()  # As mentioned in the version 2 of the VQ-VAE implementation, the gradient
         # before the codebook is copied and does not flow through the codebook.
 
@@ -93,6 +94,9 @@ class VectorQuantizer2(nn.Module):
             hit_V = idx_N.bincount(minlength=self.vocab_size).float()
 
             # calc loss
+            # print(f"{rest_NC.shape=}")
+            # print(f"{d_no_grad.shape=}")
+            # print(f"{idx_N.shape=}")
             idx_Bhw = idx_N.view(B, pn, pn)  # [B, hw, hw]
             h_BChw = (
                 F.interpolate(
@@ -122,13 +126,17 @@ class VectorQuantizer2(nn.Module):
             vocab_hit_V.add_(hit_V)  # Update the statistic for the codebook
             mean_vq_loss += F.mse_loss(f_hat.data, f_BChw).mul_(self.beta) + F.mse_loss(f_hat, f_no_grad)
 
+        total_codes = torch.sum(vocab_hit_V)
+        avg_probs = vocab_hit_V / total_codes.clamp(min=1.0)
+        perplexity = torch.exp(-(avg_probs * torch.log(avg_probs + 1e-10)).sum())
+
         margin = (f_BChw.numel() / f_BChw.shape[1]) / self.vocab_size * 0.08
         if ret_usages:
             usages = [(self.ema_vocab_hit_SV[si] >= margin).float().mean().item() * 100 for si, pn in
                       enumerate(self.v_patch_nums)]
         else:
             usages = None
-        return f_hat, usages, mean_vq_loss
+        return f_hat, usages, mean_vq_loss, perplexity
 
     # ============ `forward` is only used in VAE training ============
 

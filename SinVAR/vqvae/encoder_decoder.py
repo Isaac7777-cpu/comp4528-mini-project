@@ -200,6 +200,7 @@ class Encoder(nn.Module):
 
         # middle
         h = self.mid.block_2(self.mid.attn_1(self.mid.block_1(h)))
+        # h = self.mid.block_1(h)
 
         # end
         h = self.conv_out(F.silu(self.norm_out(h), inplace=True))
@@ -256,6 +257,8 @@ class Decoder(nn.Module):
     def forward(self, z: torch.Tensor):
         # z to block_in then to middle
         h = self.mid.block_2(self.mid.attn_1(self.mid.block_1(self.conv_in(z))))
+        # h = self.conv_in(z)
+        # h = self.mid.block_1(self.conv_in(z))
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
