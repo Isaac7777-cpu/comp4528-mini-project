@@ -75,14 +75,18 @@ class VectorQuantizer2(nn.Module):
             # Note that the embedding dimension is always the same, but the grid-size for containing this embedding
             # is not the same and hence have multi-scale.
             if self.using_znorm:
-                rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (
+                # rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (
+                #         si != SN - 1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C)
+                rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='bilinear').permute(0, 2, 3, 1).reshape(-1, C) if (
                         si != SN - 1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C)
                 rest_NC = F.normalize(rest_NC, dim=-1)
                 idx_N = torch.argmax(rest_NC @ F.normalize(self.embedding.weight.data.T, dim=0), dim=1)
             else:
                 # This part calculate the difference/loss by using l2 norm and separate it into three parts --- the
                 # square of each and the dot product between.
-                rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (
+                # rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (
+                #         si != SN - 1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C)
+                rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='bilinear').permute(0, 2, 3, 1).reshape(-1, C) if (
                         si != SN - 1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C)
                 d_no_grad = torch.sum(rest_NC.square(), dim=1, keepdim=True) + torch.sum(
                     self.embedding.weight.data.square(), dim=1, keepdim=False)
@@ -194,7 +198,8 @@ class VectorQuantizer2(nn.Module):
         for si, (ph, pw) in enumerate(patch_hws):
             # As usual, convert from [B, C, h, w] to [B, h, w, C]
             z_NC = (
-                F.interpolate(f_rest, size=(ph, pw), mode='area').permute(0, 2, 3, 1).reshape(-1, C)
+                # F.interpolate(f_rest, size=(ph, pw), mode='area').permute(0, 2, 3, 1).reshape(-1, C)
+                F.interpolate(f_rest, size=(ph, pw), mode='bilinear').permute(0, 2, 3, 1).reshape(-1, C)
                 if (si != SN - 1)
                 else f_rest.permute(0, 2, 3, 1).reshape(-1, C)
             )
@@ -242,7 +247,9 @@ class VectorQuantizer2(nn.Module):
             h_BChw = F.interpolate(self.embedding(gt_ms_idx_Bl[si]).transpose_(1, 2).view(B, C, pn_next, pn_next), size=(H, W), mode='bicubic')
             f_hat.add_(self.quant_resi[si/(SN - 1)](h_BChw))
             pn_next = self.v_patch_nums[si + 1]
-            next_scales.append(F.interpolate(f_hat, size=(pn_next, pn_next), mode='area').view(B, C, -1).transpose(1, 2))       # The final shape is [B, h * w, C]
+            # next_scales.append(F.interpolate(f_hat, size=(pn_next, pn_next), mode='area').view(B, C, -1).transpose(1, 2))       # The final shape is [B, h * w, C]
+            next_scales.append(F.interpolate(f_hat, size=(pn_next, pn_next), mode='bilinear').view(B, C, -1).transpose(1,
+                                                                                                               2))  # The final shape is [B, h * w, C]
         return torch.cat(next_scales, dim=1) if len(next_scales) > 1 else None
 
     def get_next_autoregressive_input(self, si: int, SN: int, f_hat: torch.Tensor, h_BChw: torch.Tensor) -> Tuple[Optional[torch.Tensor], torch.Tensor]:
@@ -250,7 +257,8 @@ class VectorQuantizer2(nn.Module):
         if si != SN - 1:
             h = self.quant_resi[si / (SN - 1)](F.interpolate(h_BChw, size=(HW, HW), mode='bicubic'))
             f_hat.add_(h)
-            return f_hat, F.interpolate(f_hat, size=(self.v_patch_nums[si + 1], self.v_patch_nums[si + 1]), mode='area')
+            # return f_hat, F.interpolate(f_hat, size=(self.v_patch_nums[si + 1], self.v_patch_nums[si + 1]), mode='area')
+            return f_hat, F.interpolate(f_hat, size=(self.v_patch_nums[si + 1], self.v_patch_nums[si + 1]), mode='bilinear')
 
 class Phi(nn.Conv2d):
     """
