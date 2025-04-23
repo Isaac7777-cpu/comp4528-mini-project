@@ -1,9 +1,10 @@
 import math
 from functools import partial
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from SinVAR.var.var_components import AdaLNBeforeHead, AdaLNSelfAttn, SelfAttnBlock, NormBeforeHead
 from SinVAR.vqvae.quatizer import VectorQuantizer2
@@ -354,6 +355,127 @@ class VAR(nn.Module):
             h = h_or_h_and_residual
         return self.head(self.head_nm(h.float()))
 
+    @torch.no_grad()
+    def autoregressive_infer(self, B: int, g_seed: Optional[int] = None) -> torch.Tensor:
+        """
+        Only used for inference, on autoregressive way
+        :param B: The batch size. One should ensure that the input is indeed of size B in the first dimension
+        :param g_seed: The random generator seed
+        :return: The embedding. Need to go through vae to decode
+        """
+        training = self.training
+        self.eval()
+        if g_seed is None:
+            rng = None
+        else:
+            self.rng.manual_seed(g_seed); rng = self.rng;
+
+        sos = self.sos_token.expand(B, self.first_l, -1)
+
+        lvl_pos = self.lvl_embed(self.lvl_1L) + self.pos_1LC
+        next_token_map = sos + lvl_pos[:, :self.first_l]
+
+        cur_L = 0
+        f_hat = sos.new_zeros(B, self.Cvae, self.patch_nums[-1], self.patch_nums[-1])
+
+        for b in self.blocks: b.attn.kv_caching(True)
+
+        for si, pn in enumerate(self.patch_nums):
+            cur_L += pn * pn
+            x = next_token_map
+            for b in self.blocks:
+                x = b(x=x, attn_bias=None)
+            logits_BlV = self.get_logits(x)
+
+            # idx_Bl = sample_with_top_k_top_p_(logits_BlV, rng=rng, top_k=top_k, top_p=top_p, num_samples=1)[:, :, 0]
+            idx_Bl = logits_BlV.argmax(dim=-1)
+            h_BChw = self.vae_quant_proxy[0].embedding(idx_Bl)
+
+            h_BChw = h_BChw.transpose(1, 2).reshape(B, self.Cvae, pn, pn)
+            f_hat, next_token_map = self.vae_quant_proxy[0].get_next_autoregressive_input(si, len(self.patch_nums), f_hat, h_BChw)
+            if si != self.num_stages_minus_1:
+                next_token_map = next_token_map.view(B, self.Cvae, -1).transpose(1, 2)
+                next_token_map = self.word_embed(next_token_map) + lvl_pos[:, cur_L: cur_L + self.patch_nums[si + 1] ** 2]
+
+        for b in self.blocks: b.attn.kv_caching(False)
+
+        self.train(training)    # Re-establish training state.
+        return self.vae_proxy[0].fhat_to_image(f_hat).add_(1).mul_(0.5)     # Denormalise, from [-1, 1] to [0, 1]
+
+    @torch.no_grad()
+    def autoregressive_infer_with_context(
+            self,
+            context: torch.Tensor,    # [B, C, H, W]
+            context_start_idx: int,
+    ) -> torch.Tensor:
+        """
+        This auto-regress with some context image.
+        :param context: The input image that needs to be used for context.
+                        Should have shape [B, 3, H, W] (H = W = 128 for this project)
+        :param context_start_idx: The patch to inject the correct map.
+        :return: The conditionally generated image.
+        """
+        assert context_start_idx < len(self.patch_nums) - 1, "[VAR] Context amount should be leave at least one place for the model to predict."
+
+        training = self.training
+        self.eval()
+
+        B = context.shape[0]
+
+        ############### Calculate the Tensor to be Injected #########
+
+        context_embedings: List[torch.Tensor] = []
+
+        for target_idx in range(context_start_idx + 1):
+            # Now, we need to actually use the correct index for all pi less than context start index
+            end_idx = sum(pn**2 for pn in self.patch_nums[1:target_idx+1])
+            start_idx = end_idx - self.patch_nums[target_idx] ** 2
+            # print(f"{start_idx=}, {end_idx=}")
+
+            # Then, we need to determine the actual correct index with the encoder
+            gt_idx_Bl: List[torch.LongTensor] = self.vae_proxy[0].img_to_idxBl(context)
+            gt_BL = torch.cat(gt_idx_Bl, dim=1)[:, self.first_l + start_idx: self.first_l + end_idx]
+            # print(f"{gt_BL.shape=}, {self.L=}")
+
+            # Pre-compute all the required embeddings
+            target_pn = self.patch_nums[target_idx]
+            context_embedding_BChw = self.vae_quant_proxy[0].embedding(gt_BL)
+            context_embedding_BChw = context_embedding_BChw.transpose(1, 2).reshape(B, self.Cvae, target_pn, target_pn)
+            context_embedings.append(context_embedding_BChw)
+
+        ############### Basic Autoregressive #######################
+        sos = self.sos_token.expand(B, self.first_l, -1)
+
+        lvl_pos = self.lvl_embed(self.lvl_1L) + self.pos_1LC
+        next_token_map = sos + lvl_pos[:, :self.first_l]
+
+        cur_L = 0
+        f_hat = sos.new_zeros(B, self.Cvae, self.patch_nums[-1], self.patch_nums[-1])
+
+        for b in self.blocks: b.attn.kv_caching(True)
+
+        for si, pn in enumerate(self.patch_nums):
+            cur_L += pn * pn
+            x = next_token_map
+            for b in self.blocks:
+                x = b(x=x, attn_bias=None)
+            logits_BlV = self.get_logits(x)         # This is a logit probability tensor (close to one-hot)
+            # print(logits_BlV, logits_BlV.shape)
+
+            idx_Bl = logits_BlV.argmax(dim=-1)      # Pick the most likely label determinately
+            h_BChw = self.vae_quant_proxy[0].embedding(idx_Bl)
+
+            h_BChw = h_BChw.transpose(1, 2).reshape(B, self.Cvae, pn, pn) if si > context_start_idx else context_embedings[si]
+            f_hat, next_token_map = self.vae_quant_proxy[0].get_next_autoregressive_input(si, len(self.patch_nums), f_hat, h_BChw)
+            if si != self.num_stages_minus_1:
+                next_token_map = next_token_map.view(B, self.Cvae, -1).transpose(1, 2)
+                next_token_map = self.word_embed(next_token_map) + lvl_pos[:, cur_L: cur_L + self.patch_nums[si + 1] ** 2]
+
+        for b in self.blocks: b.attn.kv_caching(False)
+
+        self.train(training)    # Re-establish training state.
+        return self.vae_proxy[0].fhat_to_image(f_hat).add_(1).mul_(0.5)     # Denormalise, from [-1, 1] to [0, 1]
+
     def forward(self, x_BLCv_wo_first_l: torch.Tensor) -> torch.Tensor:  # returns logits_BLV
         """
         :param x_BLCv_wo_first_l: teacher forcing input (B, self.L-self.first_l, self.Cvae)
@@ -363,7 +485,7 @@ class VAR(nn.Module):
         B: int = x_BLCv_wo_first_l.shape[0]  # Batch Size
 
         sos = self.sos_token.expand(B, self.first_l, -1)
-        if self.prog_si == 0:
+        if self.prog_si == 0:                   # Progressive training and currently at the starting location.
             x_BLC = sos
         else:
             x_BLC = torch.cat((sos, self.word_embed(x_BLCv_wo_first_l.float())), dim=1)
@@ -409,7 +531,8 @@ class VAR(nn.Module):
             )):
                 if with_weight: m.weight.data.fill_(1.)
                 if with_bias: m.bias.data.zero_()
-            elif isinstance(m, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d)):
+            elif isinstance(m, (
+            nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d)):
                 if conv_std_or_gain > 0:
                     nn.init.trunc_normal_(m.weight.data, std=conv_std_or_gain)
                 else:
@@ -432,4 +555,3 @@ class VAR(nn.Module):
             if hasattr(sab.ffn, 'fcg') and sab.ffn.fcg is not None:
                 nn.init.ones_(sab.ffn.fcg.bias)
                 nn.init.trunc_normal_(sab.ffn.fcg.weight, std=1e-5)
-

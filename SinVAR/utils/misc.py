@@ -17,9 +17,6 @@ import pytz
 import torch
 import torch.distributed as tdist
 
-# import dist
-# from utils import arg_util
-
 os_system = functools.partial(subprocess.call, shell=True)
 
 

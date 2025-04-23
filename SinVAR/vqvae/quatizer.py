@@ -247,9 +247,7 @@ class VectorQuantizer2(nn.Module):
             h_BChw = F.interpolate(self.embedding(gt_ms_idx_Bl[si]).transpose_(1, 2).view(B, C, pn_next, pn_next), size=(H, W), mode='bicubic')
             f_hat.add_(self.quant_resi[si/(SN - 1)](h_BChw))
             pn_next = self.v_patch_nums[si + 1]
-            # next_scales.append(F.interpolate(f_hat, size=(pn_next, pn_next), mode='area').view(B, C, -1).transpose(1, 2))       # The final shape is [B, h * w, C]
-            next_scales.append(F.interpolate(f_hat, size=(pn_next, pn_next), mode='bilinear').view(B, C, -1).transpose(1,
-                                                                                                               2))  # The final shape is [B, h * w, C]
+            next_scales.append(F.interpolate(f_hat, size=(pn_next, pn_next), mode='bilinear').view(B, C, -1).transpose(1, 2))  # The final shape is [B, h * w, C]
         return torch.cat(next_scales, dim=1) if len(next_scales) > 1 else None
 
     def get_next_autoregressive_input(self, si: int, SN: int, f_hat: torch.Tensor, h_BChw: torch.Tensor) -> Tuple[Optional[torch.Tensor], torch.Tensor]:
@@ -257,8 +255,11 @@ class VectorQuantizer2(nn.Module):
         if si != SN - 1:
             h = self.quant_resi[si / (SN - 1)](F.interpolate(h_BChw, size=(HW, HW), mode='bicubic'))
             f_hat.add_(h)
-            # return f_hat, F.interpolate(f_hat, size=(self.v_patch_nums[si + 1], self.v_patch_nums[si + 1]), mode='area')
             return f_hat, F.interpolate(f_hat, size=(self.v_patch_nums[si + 1], self.v_patch_nums[si + 1]), mode='bilinear')
+        else:
+            h = self.quant_resi[si/(SN-1)](h_BChw)
+            f_hat.add_(h)
+            return f_hat, f_hat
 
 class Phi(nn.Conv2d):
     """

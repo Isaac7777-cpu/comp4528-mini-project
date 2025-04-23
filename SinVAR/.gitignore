@@ -1,2 +1,4 @@
 pretrained-models/**
-runs/var_training/**
+runs/**
+logs/**
+generated_images/**
