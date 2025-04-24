@@ -46,20 +46,20 @@ vae_local.load_state_dict(torch.load(os.path.join(local_path, vae_ckpt), map_loc
 print('')
 
 # load var
-model_path = "./runs/models/var_training_v0.5.0_depth=8_train_size=1024_epoc=100_best_val.pth"
+model_path = "./runs/models/var_training_v0.5.1_depth=10_train_size=1024_epoc=100_best_val.pth"
 var_wo_ddp : VAR = torch.load(model_path, weights_only=False)
 
 print("[INFER_LOG] Successfully loaded Visual AutoRegressive Model\n")
 
 # Load previously generated images
-inp_img_path = './data/transformed_image.jpg'
+inp_img_path = './data/edited_image_2.jpg'
 input_img = read_image(inp_img_path).float() / 255.0                 # Convert to float tensor [0,1]
 
 # Scaled up the image
 context_tensor = input_img.unsqueeze(0).to(vae_var_config['device'])
 
 # Obtaining the image
-output: torch.Tensor = var_wo_ddp.autoregressive_infer_with_context(context=context_tensor, context_start_idx=5)
+output: torch.Tensor = var_wo_ddp.autoregressive_infer_with_context(context=context_tensor, context_start_idx=5, single_injection=False)
 
 print("[INFER_LOG] Outputs generated...\n")
 
@@ -79,7 +79,7 @@ for i in range(output.size(0)):
 
 for i in range(context_tensor.shape[0]):
     img = context_tensor[i]
-    img = v2.functional.adjust_saturation(img, 1.2)
+    # img = v2.functional.adjust_saturation(img, 1.2)
     save_image(img, os.path.join(save_dir, f"original_image_{i}.png"))
 
 print("[INFER_LOG] Done")

@@ -407,6 +407,7 @@ class VAR(nn.Module):
             self,
             context: torch.Tensor,    # [B, C, H, W]
             context_start_idx: int,
+            single_injection: bool = False
     ) -> torch.Tensor:
         """
         This auto-regress with some context image.
@@ -465,7 +466,9 @@ class VAR(nn.Module):
             idx_Bl = logits_BlV.argmax(dim=-1)      # Pick the most likely label determinately
             h_BChw = self.vae_quant_proxy[0].embedding(idx_Bl)
 
-            h_BChw = h_BChw.transpose(1, 2).reshape(B, self.Cvae, pn, pn) if si > context_start_idx else context_embedings[si]
+            h_BChw = h_BChw.transpose(1, 2).reshape(B, self.Cvae, pn, pn) \
+                     if (not single_injection and si > context_start_idx) or (single_injection and si != context_start_idx) \
+                     else context_embedings[si]
             f_hat, next_token_map = self.vae_quant_proxy[0].get_next_autoregressive_input(si, len(self.patch_nums), f_hat, h_BChw)
             if si != self.num_stages_minus_1:
                 next_token_map = next_token_map.view(B, self.Cvae, -1).transpose(1, 2)

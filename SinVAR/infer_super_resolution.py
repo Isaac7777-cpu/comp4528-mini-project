@@ -52,7 +52,7 @@ var_wo_ddp : VAR = torch.load(model_path, weights_only=False)
 print("[INFER_LOG] Successfully loaded Visual AutoRegressive Model\n")
 
 # Load previously generated images
-inp_img_path = './generated_images/unconditional/image_0.png'
+inp_img_path = 'generated_images/unconditional/v0-5-1/image_0.png'
 train_img_path = './data/transformed_image.jpg'
 input_img = read_image(inp_img_path).float() / 255.0                 # Convert to float tensor [0,1]
 train_img = read_image(train_img_path).float() / 255.0                 # Convert to float tensor [0,1]
@@ -94,7 +94,7 @@ for i in range(2):          # vertical: 0 and 1
 context_tensor = torch.stack(patches, dim=0).to(vae_var_config['device'])   # [B=2, C=3, H=128, W=128]
 
 # Obtaining the image
-output: torch.Tensor = var_wo_ddp.autoregressive_infer_with_context(context=context_tensor, context_start_idx=4)
+output: torch.Tensor = var_wo_ddp.autoregressive_infer_with_context(context=context_tensor, context_start_idx=1, single_injection=True)
 
 print("[INFER_LOG] Outputs generated...\n")
 
