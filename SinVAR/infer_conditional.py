@@ -46,7 +46,7 @@ vae_local.load_state_dict(torch.load(os.path.join(local_path, vae_ckpt), map_loc
 print('')
 
 # load var
-model_path = "./runs/models/var_training_v0.5.1_depth=10_train_size=1024_epoc=100_best_val.pth"
+model_path = "./runs/models/var_training_v0.5.0_depth=8_train_size=1024_epoc=100_best_val.pth"
 var_wo_ddp : VAR = torch.load(model_path, weights_only=False)
 
 print("[INFER_LOG] Successfully loaded Visual AutoRegressive Model\n")
